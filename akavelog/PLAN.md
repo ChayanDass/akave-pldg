@@ -1,5 +1,10 @@
 # AkaveLog: Decentralized Log Ingestion, Storage, and Visualization using Akave O3
 
+**Status**: Ready for review
+**Contributor**: anuragShingare30, Chayan Das 
+**Date**: February 4, 2026
+**Note:** Open for potential collaborators
+
 
 **AkaveLog is a decentralized logging platform that ingests logs via a lightweight service, stores them immutably in Akave O3, and enables fast querying through metadata indexing and Visualized through a web-based UI with filtering and alerting features**
 
