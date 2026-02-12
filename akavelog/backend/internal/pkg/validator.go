@@ -1,3 +1,3 @@
 package pkg
 
-// @dev Custom validation rules	
+// @dev Custom validation rules

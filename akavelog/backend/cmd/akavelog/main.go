@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-func main(){
+func main() {
 	// main.go
 	fmt.Println("Akavelog!!!")
 }
