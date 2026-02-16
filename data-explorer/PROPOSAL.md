@@ -7,7 +7,7 @@ For Akave’s storage use cases, users need a higher-level view that represents 
 
 ### Existing Infrastructure
 - **Explorer:** explorer.akave.ai (Blockscout-based)
-- **Public RPC:** https://c1-us.akave.ai/ext/bc/56g16Hr1SHQRzdM8JLm3GKYv7APVHY8T2TyeZLvDVzCaTRS7W/rpc
+- **Public RPC:** https://c6-us.akave.ai/ext/bc/56g16Hr1SHQRzdM8JLm3GKYv7APVHY8T2TyeZLvDVzCaTRS7W/rpc
 - **Faucet:** faucet.akave.ai
 
 ## Problem Statement
@@ -140,5 +140,5 @@ As we proceed, we will refine:
 
 ## References
 - **Akave Explorer (Blockscout):** explorer.akave.ai
-- **Public RPC:** https://c1-us.akave.ai/ext/bc/56g16Hr1SHQRzdM8JLm3GKYv7APVHY8T2TyeZLvDVzCaTRS7W/rpc
+- **Public RPC:** https://c6-us.akave.ai/ext/bc/56g16Hr1SHQRzdM8JLm3GKYv7APVHY8T2TyeZLvDVzCaTRS7W/rpc
 - **Faucet:** faucet.akave.ai
