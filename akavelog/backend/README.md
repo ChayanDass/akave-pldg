@@ -1,10 +1,110 @@
 # Akavelog Backend
 
+Go backend for the Akavelog log-ingestion service. It exposes an HTTP API to manage **inputs** (ingest sources) and to **ingest** log payloads by path.
 
-## Getting Started
+---
 
-> Add instructions to set up locally under Getting Started section above!!!
+## File structure
 
+```
+akavelog/backend/
+├── cmd/
+│   └── akavelog/
+│       └── main.go              # Entrypoint: load config, run migrations, connect DB, start server
+├── internal/
+│   ├── config/
+│   │   ├── config.go            # Config struct, LoadConfig (koanf + .env), Server/Database/Primary types
+│   │   └── observability.go     # ObservabilityConfig, New Relic, logging, health checks
+│   ├── database/
+│   │   ├── database.go          # pgx pool, New(), optional New Relic + zerolog tracing
+│   │   ├── migrator.go         # Migrate() – tern migrations via config DSN
+│   │   └── migrations/         # Tern SQL: 001_setup.sql, 002_projects.sql, 003_inputs.sql
+│   ├── logger/
+│   │   └── logger.go           # zerolog + New Relic LoggerService, PgxLogger
+│   ├── server/
+│   │   ├── server.go           # Echo server, routes, InputHandler, IngestDispatcher
+│   │   └── ingest.go           # IngestDispatcher – routes /ingest/<path> to registered handlers
+│   ├── handler/
+│   │   └── inputs.go           # InputHandler – CRUD for inputs, list types, mount ingest by path
+│   ├── repository/
+│   │   └── input.go            # InputRepository – persist inputs (id, type, title, configuration, etc.)
+│   ├── model/
+│   │   ├── project.go          # Input, InputState (used by inputs API)
+│   │   └── ...                 # Other domain models (projects, batches, alerts, etc.)
+│   ├── infrastructure/
+│   │   └── inputs/             # Pluggable input types
+│   │       ├── registry.go     # GlobalRegistry, Factory, Create, ListRegistered
+│   │       ├── interfaces.go   # MessageInput, InputBuffer, Config, Factory
+│   │       ├── buffer.go       # InputBuffer interface
+│   │       ├── typeinfo.go     # TypeInfo for API (config spec, etc.)
+│   │       ├── global.go       # GlobalRegistry singleton
+│   │       └── httpinput/      # Built-in "http" input type
+│   │           ├── init.go     # Registers factory in init()
+│   │           ├── factory.go  # Factory implementation
+│   │           └── input.go    # HTTP ingest handler
+│   ├── middleware/             # Auth, recovery, rate limit (for future use)
+│   └── pkg/                    # Shared helpers (ids, validator, compression)
+├── go.mod
+├── go.sum
+├── .env                        # Local env (loaded by config; see .env.example)
+└── .env.example                # Template for AKAVELOG_* variables
+```
+
+---
+
+## Current behaviour
+
+### Startup (main.go)
+
+1. **Config** – `config.LoadConfig()` loads `.env` (if present) then reads `AKAVELOG_*` env vars via koanf into `Config` (Primary, Server, Database, Observability).
+2. **Logger** – Zerolog + optional New Relic (`logger.NewLoggerService`, `NewLoggerWithService`).
+3. **Migrations** – `database.Migrate(ctx, &log, cfg)` runs tern migrations from `internal/database/migrations/` (001_setup, 002_projects, 003_inputs).
+4. **Database** – `database.New(cfg, &log, loggerService)` builds a pgx pool with optional New Relic and pgx-zerolog tracing in local env.
+5. **Server** – `server.New(cfg, db.Pool)` creates the Echo app, registers routes, then `srv.Start(ctx)` listens on `Config.Server.Port`.
+
+### HTTP API
+
+- **Input management**
+  - `GET /inputs/types` – list registered input type names (e.g. `http`).
+  - `GET /inputs/types/:type` – config spec for one type.
+  - `GET /inputs/info` – config spec for all types.
+  - `GET /inputs` – list saved inputs from DB.
+  - `POST /inputs` – create an input (type, title, config, etc.); can mount an ingest path.
+
+- **Ingest**
+  - `ANY /ingest/*` – dispatched by path. Each input type can register a handler for a path (e.g. `/ingest/raw`). The **IngestDispatcher** strips `/ingest` and routes the rest to the handler registered for that path.
+
+### Input types (pluggable)
+
+- **Registry** – `inputs.GlobalRegistry` holds factories per type name. Packages like `httpinput` register in `init()`.
+- **http** – Built-in type registered in `internal/infrastructure/inputs/httpinput`. Provides an HTTP ingest endpoint; creating an input of type `http` with a `listen` path mounts that path under `/ingest/*`.
+
+### Config and env
+
+- **.env** – Optional. Loaded at startup by `config.LoadConfig()` (godotenv). Use `.env.example` as a template.
+- **Variables** – All config keys are under the `AKAVELOG_` prefix and use dots for nesting, e.g. `AKAVELOG_SERVER.PORT`, `AKAVELOG_DATABASE.HOST`, `AKAVELOG_OBSERVABILITY.NEW_RELIC.LICENSE_KEY` (empty = disabled).
+
+---
+
+## Getting started
+
+1. **Copy env**  
+   `cp .env.example .env` and set at least Database (and optionally Server.Port, Observability).
+
+2. **Run Postgres**  
+   Use the connection settings from `.env` (e.g. local Postgres or Docker).
+
+3. **Run the server** (from `akavelog/backend/`)  
+   ```bash
+   go run ./cmd/akavelog
+   ```  
+   Server listens on the port in `AKAVELOG_SERVER.PORT` (e.g. `8080`).
+
+4. **Try the API**  
+   - `curl http://localhost:8080/inputs/types`  
+   - `curl http://localhost:8080/inputs/info`
+
+---
 
 ## Step-By-Step Implementation Plan
 
@@ -95,7 +195,7 @@
 - Log detail panel
 
 
-### Phase 7: Alerting 
+### Phase 7: Alerting
 
 
 **Step 12: Alert Rule CRUD**
