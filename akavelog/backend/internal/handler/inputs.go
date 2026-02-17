@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -177,4 +179,51 @@ func (h *InputHandler) CreateInput(c echo.Context) error {
 		CreatedAt:     in.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		State:         "RUNNING",
 	})
+}
+
+// RestoreInputs loads inputs from the DB and mounts their ingest handlers so that
+// existing inputs (e.g. after server restart) respond to /ingest/<path>.
+func (h *InputHandler) RestoreInputs(ctx context.Context) {
+	list, err := h.InputRepo.List(ctx)
+	if err != nil {
+		log.Printf("[inputs] restore list: %v", err)
+		return
+	}
+	for _, in := range list {
+		if in.Type != "http" {
+			continue
+		}
+		cfg := make(inputs.Config)
+		if len(in.Configuration) > 0 {
+			_ = json.Unmarshal(in.Configuration, &cfg)
+		}
+		if _, hasListen := cfg["listen"]; hasListen {
+			continue
+		}
+		if _, ok := cfg["base_path"]; !ok {
+			cfg["base_path"] = "/ingest"
+		}
+		run, err := h.Registry.Create(in.Type, cfg, h.Buffer)
+		if err != nil {
+			log.Printf("[inputs] restore create %s: %v", in.Title, err)
+			continue
+		}
+		if err := run.Start(); err != nil {
+			log.Printf("[inputs] restore start %s: %v", in.Title, err)
+			continue
+		}
+		if ep, ok := run.(inputs.HTTPEndpointInput); ok {
+			path := strings.TrimPrefix(ep.Path(), "/ingest")
+			if path == "" {
+				path = "/"
+			}
+			if h.MountIngest != nil {
+				h.MountIngest(path, ep.Handler())
+			}
+		}
+		h.InstancesMu.Lock()
+		h.Instances[in.ID] = InstanceRecord{Input: in, Run: run}
+		h.InstancesMu.Unlock()
+		log.Printf("[inputs] restored %s → /ingest%s", in.Title, cfg["description"])
+	}
 }

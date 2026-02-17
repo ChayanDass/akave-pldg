@@ -5,12 +5,16 @@ import (
 	"log"
 	"sort"
 	"sync"
+	"time"
 
+	"github.com/akave-ai/akavelog/internal/batcher"
 	"github.com/akave-ai/akavelog/internal/config"
 	"github.com/akave-ai/akavelog/internal/handler"
 	"github.com/akave-ai/akavelog/internal/infrastructure/inputs"
 	_ "github.com/akave-ai/akavelog/internal/infrastructure/inputs/httpinput"
+	"github.com/akave-ai/akavelog/internal/model"
 	"github.com/akave-ai/akavelog/internal/repository"
+	"github.com/akave-ai/akavelog/internal/storage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -31,8 +35,11 @@ func (b *memoryBuffer) Insert(p []byte) {
 
 // Server holds the Echo app and dependencies.
 type Server struct {
-	Echo   *echo.Echo
-	Config *config.Config
+	Echo           *echo.Echo
+	Config         *config.Config
+	batcher        *batcher.Batcher // optional; stopped on Shutdown
+	recentLogs     *RecentLogsStore
+	uploadStatus   *UploadStatusStore
 }
 
 // New builds the Echo server and registers routes.
@@ -42,12 +49,52 @@ func New(cfg *config.Config, pool *pgxpool.Pool) *Server {
 	e.HideBanner = true
 	e.Use(middleware.Recover(), middleware.Logger())
 
-	buffer := &memoryBuffer{}
+	recentLogs := newRecentLogsStore()
+	uploadStatus := &UploadStatusStore{}
+
+	var buf inputs.InputBuffer
+	var b *batcher.Batcher
+	if cfg.Storage != nil && cfg.Storage.O3 != nil {
+		o3Client, err := storage.NewO3Client(cfg.Storage.O3)
+		if err != nil {
+			log.Printf("[server] O3 client: %v (using in-memory buffer)", err)
+		}
+		if o3Client != nil {
+			if err := o3Client.EnsureBucket(context.Background()); err != nil {
+				log.Printf("[server] O3 ensure bucket: %v (upload may fail)", err)
+			}
+			bc := batcher.DefaultBatcherConfig()
+			if cfg.Batcher != nil {
+				if cfg.Batcher.MaxBatchSize > 0 {
+					bc.MaxBatchSize = cfg.Batcher.MaxBatchSize
+				}
+				if cfg.Batcher.FlushInterval != "" {
+					if d, err := time.ParseDuration(cfg.Batcher.FlushInterval); err == nil && d > 0 {
+						bc.FlushInterval = d
+					}
+				}
+			}
+			opts := &batcher.BatcherOpts{
+				OnLog:   func(entry *model.LogEntry) { recentLogs.AddEntry(entry) },
+				OnFlush: func(count int, key string) { uploadStatus.SetLastFlush(count, key) },
+			}
+			b = batcher.NewBatcher(bc, o3Client, "default", opts)
+			buf = b
+			uploadStatus.mu.Lock()
+			uploadStatus.BatcherOn = true
+			uploadStatus.mu.Unlock()
+			log.Printf("[server] batcher enabled: flush to Akave O3 (batch=%d, interval=%v)", bc.MaxBatchSize, bc.FlushInterval)
+		}
+	}
+	if buf == nil {
+		buf = &memoryBuffer{}
+	}
+
 	ingestD := NewIngestDispatcher()
 
 	inputHandler := &handler.InputHandler{
 		Registry:    inputs.GlobalRegistry,
-		Buffer:      buffer,
+		Buffer:      buf,
 		InputRepo:   repository.NewInputRepository(pool),
 		Instances:   make(map[uuid.UUID]handler.InstanceRecord),
 		MountIngest: ingestD.Mount,
@@ -63,24 +110,45 @@ func New(cfg *config.Config, pool *pgxpool.Pool) *Server {
 	// Ingest: any path under /ingest is dispatched by path
 	e.Any("/ingest/*", echo.WrapHandler(ingestD))
 
+	// Demo UI: recent logs and upload status
+	e.GET("/logs/recent", func(c echo.Context) error {
+		return c.JSON(200, map[string]any{"logs": recentLogs.GetRecent()})
+	})
+	e.GET("/logs/status", func(c echo.Context) error {
+		st := uploadStatus.Get()
+		return c.JSON(200, map[string]any{
+			"batcher_enabled":  st.BatcherOn,
+			"last_upload_at":   st.LastAt,
+			"last_upload_key":  st.LastKey,
+			"last_upload_count": st.LastCount,
+			"pending_count":    st.Pending,
+		})
+	})
+
+	inputHandler.RestoreInputs(context.Background())
+
 	types := inputs.GlobalRegistry.ListRegistered()
 	sort.Strings(types)
 	log.Printf("Registered input types: %v", types)
 
-	return &Server{Echo: e, Config: cfg}
+	return &Server{Echo: e, Config: cfg, batcher: b, recentLogs: recentLogs, uploadStatus: uploadStatus}
 }
 
 // Start starts the HTTP server. Blocks until the context is cancelled or the server fails.
+// On context cancel, Shutdown is called so the batcher flushes remaining logs.
 func (s *Server) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
-		_ = s.Echo.Shutdown(context.Background())
+		_ = s.Shutdown(context.Background())
 	}()
 	addr := ":" + s.Config.Server.Port
 	return s.Echo.Start(addr)
 }
 
-// Shutdown gracefully shuts down the server.
+// Shutdown gracefully shuts down the server and the batcher (flush remaining logs).
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.batcher != nil {
+		s.batcher.Stop()
+	}
 	return s.Echo.Shutdown(ctx)
 }

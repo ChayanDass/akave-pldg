@@ -16,6 +16,28 @@ type Config struct {
 	Server        ServerConfig         `koanf:"server" validate:"required"`
 	Database      DatabaseConfig       `koanf:"database" validate:"required"`
 	Observability *ObservabilityConfig `koanf:"observability" validate:"required"`
+	Storage       *StorageConfig       `koanf:"storage"`       // optional; Akave O3 when set
+	Batcher       *BatcherConfig       `koanf:"batcher"`       // optional; batch size and flush interval
+}
+
+// BatcherConfig is optional; used when Storage.O3 is set.
+type BatcherConfig struct {
+	MaxBatchSize  int    `koanf:"max_batch_size"`  // flush when batch has this many entries (default 1000)
+	FlushInterval string `koanf:"flush_interval"`  // e.g. "5s", "30s" (default 30s)
+}
+
+// StorageConfig holds storage backends (e.g. Akave O3).
+type StorageConfig struct {
+	O3 *O3Config `koanf:"o3"`
+}
+
+// O3Config is S3-compatible config for Akave O3 (https://o3-rc2.akave.xyz or similar).
+type O3Config struct {
+	Endpoint  string `koanf:"endpoint"`   // e.g. https://o3-rc2.akave.xyz
+	Bucket    string `koanf:"bucket"`     // bucket name
+	Region    string `koanf:"region"`     // e.g. us-east-1
+	AccessKey string `koanf:"access_key"`
+	SecretKey string `koanf:"secret_key"`
 }
 
 type Primary struct {

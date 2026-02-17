@@ -21,8 +21,13 @@ akavelog/backend/
 │   │   └── migrations/         # Tern SQL: 001_setup.sql, 002_projects.sql, 003_inputs.sql
 │   ├── logger/
 │   │   └── logger.go           # zerolog + New Relic LoggerService, PgxLogger
+│   ├── batcher/
+│   │   ├── batcher.go          # Batcher: implements InputBuffer, validates logs, flushes to O3
+│   │   └── validator.go        # ValidateLog(): JSON → LogEntry (service, message required)
+│   ├── storage/
+│   │   └── o3.go               # O3Client: S3-compatible PutObject for Akave O3
 │   ├── server/
-│   │   ├── server.go           # Echo server, routes, InputHandler, IngestDispatcher
+│   │   ├── server.go           # Echo server, routes, InputHandler, IngestDispatcher, batcher
 │   │   └── ingest.go           # IngestDispatcher – routes /ingest/<path> to registered handlers
 │   ├── handler/
 │   │   └── inputs.go           # InputHandler – CRUD for inputs, list types, mount ingest by path
@@ -30,6 +35,7 @@ akavelog/backend/
 │   │   └── input.go            # InputRepository – persist inputs (id, type, title, configuration, etc.)
 │   ├── model/
 │   │   ├── project.go          # Input, InputState (used by inputs API)
+│   │   ├── logentry.go         # LogEntry (timestamp, service, level, message, tags)
 │   │   └── ...                 # Other domain models (projects, batches, alerts, etc.)
 │   ├── infrastructure/
 │   │   └── inputs/             # Pluggable input types
@@ -79,10 +85,21 @@ akavelog/backend/
 - **Registry** – `inputs.GlobalRegistry` holds factories per type name. Packages like `httpinput` register in `init()`.
 - **http** – Built-in type registered in `internal/infrastructure/inputs/httpinput`. Provides an HTTP ingest endpoint; creating an input of type `http` with a `listen` path mounts that path under `/ingest/*`.
 
+### Batcher, validator, and Akave O3
+
+- **Log format** – Ingested payloads should be JSON with required fields `service` and `message`, and optional `timestamp`, `level`, `tags`, `project_id`. See `model.LogEntry`.
+- **Validator** – `batcher.ValidateLog(raw)` parses JSON and validates; invalid logs are logged and dropped.
+- **Batcher** – When `AKAVELOG_STORAGE.O3` is set, the server uses a **Batcher** as the ingest buffer instead of in-memory only. The batcher:
+  - Accepts raw bytes via `Insert([]byte)` (same as `InputBuffer`).
+  - Validates each payload; on success appends to the current batch.
+  - Flushes when batch size reaches **1000** entries or every **30s** (configurable via `BatcherConfig`).
+  - On flush: serializes batch to JSON, gzips it, uploads to Akave O3 with key `logs/<project>/YYYY/MM/DD/<uuid>.json.gz`.
+- **O3** – S3-compatible client in `internal/storage/o3.go`. Configure with `AKAVELOG_STORAGE.O3.ENDPOINT`, `BUCKET`, `REGION`, `ACCESS_KEY`, `SECRET_KEY`. If O3 is not configured, the server falls back to an in-memory buffer (no upload). To **verify uploads** (list/download batches), use the [AWS CLI with O3](docs/O3_VERIFY.md); the Akave web UI shows buckets only.
+
 ### Config and env
 
 - **.env** – Optional. Loaded at startup by `config.LoadConfig()` (godotenv). Use `.env.example` as a template.
-- **Variables** – All config keys are under the `AKAVELOG_` prefix and use dots for nesting, e.g. `AKAVELOG_SERVER.PORT`, `AKAVELOG_DATABASE.HOST`, `AKAVELOG_OBSERVABILITY.NEW_RELIC.LICENSE_KEY` (empty = disabled).
+- **Variables** – All config keys are under the `AKAVELOG_` prefix and use dots for nesting, e.g. `AKAVELOG_SERVER.PORT`, `AKAVELOG_DATABASE.HOST`, `AKAVELOG_OBSERVABILITY.NEW_RELIC.LICENSE_KEY` (empty = disabled). Optional: `AKAVELOG_STORAGE.O3.*` for Akave O3 (endpoint, bucket, region, access_key, secret_key).
 
 ---
 
@@ -103,6 +120,9 @@ akavelog/backend/
 4. **Try the API**  
    - `curl http://localhost:8080/inputs/types`  
    - `curl http://localhost:8080/inputs/info`
+
+5. **Demo UI** (optional)  
+   From `akavelog/frontend`: `npm install && npm run dev`, then open http://localhost:3000. You can create an HTTP input, send test logs, see incoming logs, and monitor upload status to O3 in the side panel.
 
 ---
 
