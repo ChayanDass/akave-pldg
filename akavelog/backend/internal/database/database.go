@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/anuragShingare30/akavelog/internal/config"
-	loggerConfig "github.com/anuragShingare30/akavelog/internal/logger"
+	"github.com/akave-ai/akavelog/internal/config"
+	loggerConfig "github.com/akave-ai/akavelog/internal/logger"
 	pgxzero "github.com/jackc/pgx-zerolog"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,17 +18,15 @@ import (
 	"github.com/rs/zerolog"
 )
 
-
 type Database struct {
 	Pool *pgxpool.Pool
-	log *zerolog.Logger
+	log  *zerolog.Logger
 }
 
 // multiTracer allows chaining multiple tracers
 type multiTracer struct {
 	tracers []any
 }
-
 
 // TraceQueryStart implements pgx tracer interface
 func (mt *multiTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
